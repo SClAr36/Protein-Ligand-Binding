@@ -1,0 +1,30 @@
+# macOS 系统文件
+.DS_Store
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 虚拟环境
+venv/
+.env/
+
+# IDE 配置
+.vscode/
+.idea/
+
+# 数据文件
+data/raw/
+data/interim/
+data/processed/*/structures/
+data/processed/feature_cache
+
+# 模型
+models/
+*.pkl
+
+# 日志
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
