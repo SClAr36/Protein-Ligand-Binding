@@ -21,8 +21,8 @@ alpha_beta_pairs = [
 ]
 
 tau = 1.0
-cutoff_list = list(range(5, 11, 1))  # 5 到 50
-repeat_times = 1  # ***关键新增***
+cutoff_list = list(range(5, 50, 1))  # 5 到 50
+repeat_times = 5  # ***关键新增***
 
 
 def train_and_eval(alpha, beta, tau, cutoff, repeat):
