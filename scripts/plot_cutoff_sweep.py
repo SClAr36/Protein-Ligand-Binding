@@ -33,14 +33,14 @@ def compute_median_curve(df, model_name):
 
 def plot_fig4_1():
     df_exp = load_results("exp")
-    #df_lor = load_results("lor")
+    df_lor = load_results("lor")
 
     # -------- 计算四条曲线 --------
     cut_exp_rf, med_exp_rf   = compute_median_curve(df_exp, "rf")
     cut_exp_lgb, med_exp_lgb = compute_median_curve(df_exp, "lgb")
 
-    #cut_lor_rf, med_lor_rf   = compute_median_curve(df_lor, "rf")
-    #cut_lor_lgb, med_lor_lgb = compute_median_curve(df_lor, "lgb")
+    cut_lor_rf, med_lor_rf   = compute_median_curve(df_lor, "rf")
+    cut_lor_lgb, med_lor_lgb = compute_median_curve(df_lor, "lgb")
 
     # -------- 颜色 & 样式 --------
     colors = {
@@ -65,13 +65,13 @@ def plot_fig4_1():
             styles["lgb"], color=colors["exp_lgb"],
             linewidth=2.2, label="RI(E)-GBT (median)")
 
-    # ax.plot(cut_lor_rf,  med_lor_rf,
-    #         styles["rf"],  color=colors["lor_rf"],
-    #         linewidth=2.2, label="RI(L)-RF (median)")
+    ax.plot(cut_lor_rf,  med_lor_rf,
+            styles["rf"],  color=colors["lor_rf"],
+            linewidth=2.2, label="RI(L)-RF (median)")
 
-    # ax.plot(cut_lor_lgb, med_lor_lgb,
-    #         styles["lgb"], color=colors["lor_lgb"],
-    #         linewidth=2.2, label="RI(L)-GBT (median)")
+    ax.plot(cut_lor_lgb, med_lor_lgb,
+            styles["lgb"], color=colors["lor_lgb"],
+            linewidth=2.2, label="RI(L)-GBT (median)")
 
     # -------- 轴与标注 --------
     ax.set_xlabel("Cutoff distance (Å)", fontsize=14)

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import os
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
@@ -129,31 +130,44 @@ def load_feature(
     max_cutoff_global: float | None = None,
 ) -> np.ndarray:
     """
-    对单个 complex 计算 36 维 RI 特征，带多层缓存。
+    对单个 complex 计算 36 维 RI 特征（含多层缓存，鲁棒性增强版）。
 
-    逻辑：
-    1）先看是否已有最终 36 维特征缓存 (pdbid, alpha, beta, tau, cutoff)；
-    2）否则，读取/构建 pair 级 φ 缓存 (pdbid, alpha, beta, tau, max_cutoff_global)；
-    3）对 dist_valid <= cutoff 的 pair，用 np.add.at 聚合到 36 维向量；
-    4）可选将这 36 维向量缓存起来。
+    执行流程：
+        Step A（快速路径）：
+            直接加载最终 36 维特征缓存：
+                data/processed/feature_cache/<pdbid>_a{alpha}_b{beta}_t{tau}_c{cutoff}.npy
+            若成功则立即返回
 
-    max_cutoff_global:
-        - 如果为 None，则退化为 max_cutoff_global = cutoff（只对当前 cutoff 有效）；
-        - 如果你在外部传入 max_cutoff_global = max(cutoff_list)，
-          那么同一 (alpha,beta,tau) 这一轮 sweep 所有 cutoff 都可以重用同一份 pair 缓存。
+        Step B：
+            若缓存不存在或已损坏，则先读取/构建 pair 级缓存（跨 cutoff 重用）：
+                data/interim/ri_pair_cache/*.npz
+
+        Step C：
+            基于当前 cutoff 聚合成 36 维 RI 特征
+
+        Step D：
+            原子写回最终 36 维缓存文件（避免半写入导致损坏）
     """
-    # 1) 先看最终特征缓存
+
     feat_cache_file = _feature_cache_path(pdbid, alpha, beta, tau, cutoff)
+
+    # ========= Step A: 尝试加载最终特征缓存 =========
     if use_cache and feat_cache_file.exists():
-        return np.load(feat_cache_file)
+        try:
+            RI = np.load(feat_cache_file)
+            if RI is None or RI.size == 0:
+                raise ValueError("缓存为空")
+            return RI
+        except Exception as e:
+            print(f"[警告] 检测到损坏缓存，已删除: {feat_cache_file} ({e})")
+            try:
+                feat_cache_file.unlink()
+            except OSError:
+                pass
 
-    # 2) 确定有效的 max_cutoff_global
-    if max_cutoff_global is None:
-        effective_max_cutoff = float(cutoff)
-    else:
-        effective_max_cutoff = float(max_cutoff_global)
+    # ========= Step B: 获取 pair 缓存 =========
+    effective_max_cutoff = float(max_cutoff_global) if max_cutoff_global is not None else float(cutoff)
 
-    # 读取 / 生成 pair 缓存
     idx_valid, dist_valid, phi_valid = _load_or_build_pair_cache(
         pdbid=pdbid,
         set_type=set_type,
@@ -164,7 +178,7 @@ def load_feature(
         use_cache=use_cache,
     )
 
-    # 3) 针对当前 cutoff 聚合到 36 维
+    # ========= Step C: 聚合至 36 维 =========
     RI = np.zeros(FEATURE_DIM, dtype=float)
 
     if idx_valid.size > 0:
@@ -172,9 +186,16 @@ def load_feature(
         if np.any(mask):
             np.add.at(RI, idx_valid[mask], phi_valid[mask])
 
-    # 4) 写入最终特征缓存
+    # ========= Step D: 原子写回 =========
+    # ========== D. 写缓存：使用老版本 np.save ==========
     if use_cache:
-        np.save(feat_cache_file, RI)
+        try:
+            np.save(str(feat_cache_file), RI)
+        except Exception as e:
+            print(f"[错误] np.save 写缓存失败: {feat_cache_file} ({e})")
+            # 写失败也返回，训练不中断
+            return RI
+
 
     return RI
 

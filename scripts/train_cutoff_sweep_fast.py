@@ -22,6 +22,8 @@ ROOT = SCRIPT_DIR.parent
 MODEL_DIR = ROOT / "models"
 MODEL_DIR.mkdir(exist_ok=True)
 
+PROGRESS_LOG = MODEL_DIR / "training_progress.log"
+
 # =====================================
 # 参数配置（你以后会修改这里）
 # =====================================
@@ -125,14 +127,51 @@ def train_and_eval(cutoff, repeat):
 
 
 if __name__ == "__main__":
+
+    # === 加载训练进度断点 ===
+    def load_progress():
+        if not PROGRESS_LOG.exists():
+            return set()
+        done = set()
+        with open(PROGRESS_LOG, "r") as f:
+            for line in f:
+                try:
+                    r, c = map(int, line.split())
+                    done.add((r, c))
+                except:
+                    pass
+        return done
+
+    done_set = load_progress()
+
     all_records = []
 
     print(f"\n==== STEP 2: Sweeping Cutoff ====\n")
 
     for repeat in range(repeat_times):
         for cutoff in cutoff_list:
+
+            # === 断点恢复：若已完成则跳过 ===
+            if (repeat, cutoff) in done_set:
+                print(f"[跳过] 已完成 repeat={repeat}, cutoff={cutoff}")
+                continue
+
             rec = train_and_eval(cutoff, repeat)
+
+            if rec is None:
+                print(f"[错误] 训练失败于 repeat={repeat}, cutoff={cutoff}，已中断")
+                with open(MODEL_DIR / "training_error.log", "a") as f:
+                    f.write(f"{repeat} {cutoff}\n")
+                raise RuntimeError(f"训练中断于 repeat={repeat}, cutoff={cutoff}")
+
+
+            # === 成功则记录日志 ===
+            with open(PROGRESS_LOG, "a") as f:
+                f.write(f"{repeat} {cutoff}\n")
+
+            # === 成功则追加到结果缓存 ===
             all_records.extend(rec)
+
 
     out_csv = MODEL_DIR / f"results_cutoff_{alpha}.csv"
     pd.DataFrame(all_records).to_csv(out_csv, index=False)
