@@ -23,6 +23,11 @@ data/processed/feature_cache
 models/
 *.pkl
 
+# 图片及论文
+figs/
+*.png
+*.pdf
+
 # 日志
 *.log
 

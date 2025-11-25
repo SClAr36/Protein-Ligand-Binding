@@ -9,7 +9,7 @@ N_PRO = len(PRO_ELEMENTS)
 N_LIG = len(LIG_ELEMENTS)
 FEATURE_DIM = N_PRO * N_LIG  # 4 * 9 = 36
 
-# 简单 vdW 半径表（Å），你以后可以按需要细调
+# 简单 vdW 半径表（Å），后续你可以按需要细调
 VDW_RADII = {
     'H': 1.20,
     'C': 1.70,
@@ -23,14 +23,96 @@ VDW_RADII = {
     'I': 1.98,
 }
 
-def get_pair_index(pro_elem: str, lig_elem: str) -> int | None:
-    """把 (蛋白元素, 配体元素) 映射到 [0,35] 的特征索引"""
-    try:
-        i = PRO_ELEMENTS.index(pro_elem)
-        j = LIG_ELEMENTS.index(lig_elem)
-        return i * N_LIG + j
-    except ValueError:
-        return None  # 如果不在 X/Y 集合里就跳过
+# 为了加速，元素 -> 索引 做成 dict
+PRO_INDEX = {e: i for i, e in enumerate(PRO_ELEMENTS)}
+LIG_INDEX = {e: j for j, e in enumerate(LIG_ELEMENTS)}
+
+
+def precompute_phi_pairs(
+    pro_coords: np.ndarray,
+    pro_elems: np.ndarray,
+    lig_coords: np.ndarray,
+    lig_elems: np.ndarray,
+    alpha: str,
+    beta: float,
+    tau: float,
+    max_cutoff: float,
+):
+    """
+    针对单个 complex 和一组 (alpha, beta, tau) 参数，预计算在
+    d_ij <= max_cutoff 范围内所有原子对的 φ(d_ij) 以及对应的 36 维索引。
+
+    返回:
+        idx_valid : (K,) int16，每个 pair 属于 [0, 35] 的特征维度
+        dist_valid: (K,) float32，各 pair 的距离
+        phi_valid : (K,) float32，各 pair 的 kernel 值
+    """
+    max_cutoff = float(max_cutoff)
+
+    # 距离矩阵 [N_pro, N_lig]
+    dist = cdist(pro_coords, lig_coords).astype(np.float32)
+
+    # 元素 -> 索引
+    pro_idx = np.array([PRO_INDEX.get(e, -1) for e in pro_elems], dtype=np.int16)
+    lig_idx = np.array([LIG_INDEX.get(e, -1) for e in lig_elems], dtype=np.int16)
+
+    pi = pro_idx[:, None]   # [N_pro, 1]
+    lj = lig_idx[None, :]   # [1, N_lig]
+
+    # 只保留元素在集合里的 pair
+    elem_valid = (pi >= 0) & (lj >= 0)
+
+    # cutoff 限制
+    cutoff_valid = dist <= max_cutoff
+
+    # vdW 半径
+    r_i = np.array([VDW_RADII.get(e, np.nan) for e in pro_elems], dtype=np.float32)  # [N_pro]
+    r_j = np.array([VDW_RADII.get(e, np.nan) for e in lig_elems], dtype=np.float32)  # [N_lig]
+    eta = tau * (r_i[:, None] + r_j[None, :])  # [N_pro, N_lig]
+
+    eta_valid = np.isfinite(eta) & (eta > 0.0)
+
+    valid = elem_valid & cutoff_valid & eta_valid
+
+    if not np.any(valid):
+        return (
+            np.zeros((0,), dtype=np.int16),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+        )
+
+    # 只在 valid 的位置上计算 (d/eta)^beta
+    x = np.zeros_like(dist, dtype=np.float32)
+    x[valid] = (dist[valid] / eta[valid]) ** beta
+
+    if alpha == "exp":
+        phi = np.zeros_like(dist, dtype=np.float32)
+        phi[valid] = np.exp(-x[valid], dtype=np.float32)
+    elif alpha == "lor":
+        phi = np.zeros_like(dist, dtype=np.float32)
+        phi[valid] = 1.0 / (1.0 + x[valid])
+    else:
+        raise ValueError("alpha must be 'exp' or 'lor'.")
+
+    # 元素或 cutoff 不合法的位置全部置零（虽然已经不在 valid 里）
+    phi[~valid] = 0.0
+
+    # 计算每个 pair 对应的 36 维 index = i * N_LIG + j
+    pair_idx = pi * N_LIG + lj           # [N_pro, N_lig]
+    pair_idx[~valid] = -1               # 无效 pair 标成 -1
+
+    # 拉平，只保留有效 pair
+    flat_valid = valid.ravel()
+    flat_idx = pair_idx.ravel()[flat_valid]
+    flat_dist = dist.ravel()[flat_valid]
+    flat_phi = phi.ravel()[flat_valid]
+
+    idx_valid = flat_idx.astype(np.int16)
+    dist_valid = flat_dist.astype(np.float32)
+    phi_valid = flat_phi.astype(np.float32)
+
+    return idx_valid, dist_valid, phi_valid
+
 
 def compute_RI_score_general(
     pro_coords: np.ndarray,
@@ -44,48 +126,28 @@ def compute_RI_score_general(
 ) -> np.ndarray:
     """
     计算单个 complex 的 36 维 RI-score 特征。
+    保留原有接口，只是内部改成向量化实现。
+
+    注意：这里的 max_cutoff 就等于 cutoff，因此不会产生“预计算跨多个 cutoff 重用”的效果；
+    真正跨 cutoff 重用是在 data_loader 里通过更大的 max_cutoff_global 来做的。
     """
+    idx_valid, dist_valid, phi_valid = precompute_phi_pairs(
+        pro_coords=pro_coords,
+        pro_elems=pro_elems,
+        lig_coords=lig_coords,
+        lig_elems=lig_elems,
+        alpha=alpha,
+        beta=beta,
+        tau=tau,
+        max_cutoff=cutoff,
+    )
+
     RI = np.zeros(FEATURE_DIM, dtype=float)
 
-    # 先算距离矩阵 [N_pro x N_lig]
-    dist = cdist(pro_coords, lig_coords)
+    if idx_valid.size == 0:
+        return RI
 
-    # cutoff 只在物理距离上截断
-    mask = dist <= cutoff
-
-    # 遍历所有原子对
-    for i, p_elem in enumerate(pro_elems):
-        # 蛋白这个元素不在 X 集合里就跳过
-        if p_elem not in PRO_ELEMENTS:
-            continue
-        r_i = VDW_RADII.get(p_elem)
-        if r_i is None:
-            continue
-
-        for j, l_elem in enumerate(lig_elems):
-            if not mask[i, j]:
-                continue
-            if l_elem not in LIG_ELEMENTS:
-                continue
-            r_j = VDW_RADII.get(l_elem)
-            if r_j is None:
-                continue
-
-            idx = get_pair_index(p_elem, l_elem)
-            if idx is None:
-                continue
-
-            d = dist[i, j]
-            eta_ij = tau * (r_i + r_j)  # 关键修正：η_ij = τ (r_i + r_j)
-            x = (d / eta_ij) ** beta
-
-            if alpha == "exp":
-                phi = np.exp(-x)
-            elif alpha == "lor":
-                phi = 1.0 / (1.0 + x)
-            else:
-                raise ValueError("alpha must be 'exp' or 'lor'.")
-
-            RI[idx] += phi
+    # 这里 precompute 已经用 cutoff 截过一次了，因此不需要再按 cutoff 做 mask
+    np.add.at(RI, idx_valid, phi_valid)
 
     return RI
