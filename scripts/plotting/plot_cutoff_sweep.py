@@ -3,8 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT = SCRIPT_DIR.parent
+ROOT = Path(__file__).resolve().parents[2]
+
 MODEL_DIR = ROOT / "models"
 FIG_DIR = ROOT / "figs"
 FIG_DIR.mkdir(exist_ok=True)
@@ -31,7 +31,7 @@ def compute_median_curve(df, model_name):
     return cutoffs, medians
 
 
-def plot_fig4_1():
+def plot_cutoff_sweep():
     df_exp = load_results("exp")
     df_lor = load_results("lor")
 
@@ -95,4 +95,4 @@ def plot_fig4_1():
 
 
 if __name__ == "__main__":
-    plot_fig4_1()
+    plot_cutoff_sweep()

@@ -3,8 +3,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT = SCRIPT_DIR.parent
+ROOT = Path(__file__).resolve().parents[2]
 
 RAW = ROOT / "data/raw/v2016"
 PROCESSED = ROOT / "data/processed"

@@ -6,10 +6,19 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr
 
-from utils.data_loader import build_dataset
+from utils.ri_loader_paramcached import build_dataset
+
+def find_project_root(start: Path, marker="utils"):
+    p = start
+    while p != p.parent:
+        if (p / marker).exists():
+            return p
+        p = p.parent
+    raise RuntimeError("Project root not found.")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT = SCRIPT_DIR.parent
+ROOT = find_project_root(SCRIPT_DIR)
+
 MODEL_DIR = ROOT / "models"
 MODEL_DIR.mkdir(exist_ok=True)
 

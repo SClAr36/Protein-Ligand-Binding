@@ -26,7 +26,7 @@ FEATURE_CACHE_DIR = PROCESSED / "feature_cache"
 FEATURE_CACHE_DIR.mkdir(exist_ok=True)
 
 # pair 级别 φ 预计算缓存目录：按 (pdbid, alpha, beta, tau, max_cutoff_global) 区分
-PAIR_CACHE_DIR = INTERIM / "ri_pair_cache"
+PAIR_CACHE_DIR = INTERIM / "ri_pair_param_cache"
 PAIR_CACHE_DIR.mkdir(exist_ok=True)
 
 
