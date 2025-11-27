@@ -1,7 +1,13 @@
-Total candidates: 13287
+===== Dataset Overview =====
+Total directories in RAW: 13287
+
+--- Index info ---
+Refined set: 4057
+Core set: 290
+Refined ∩ Core: 290
+Refined-only (refined - core): 3767
+
+--- File availability in RAW ---
 Valid complexes: 13285
 Missing protein: 2
 Missing ligand: 2
-
-refined set: 4057 valid complexes
-core set: 290 valid complexes

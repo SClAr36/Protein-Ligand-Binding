@@ -27,50 +27,50 @@ def main():
     PROCESSED = DATA / "processed"
     FEATURE_CACHE = PROCESSED / "feature_cache"
 
-    refined_csv = PROCESSED / "refined" / "refined_set_list.csv"
+    refined_only_csv = PROCESSED / "refined_only" / "refined_only_set_list.csv"
     core_csv = PROCESSED / "core" / "core_set_list.csv"
 
-    refined_ids = load_first_column(refined_csv)
+    refined_only_ids = load_first_column(refined_only_csv)
     core_ids = load_first_column(core_csv)
 
-    print(f"[INFO] refined_set_list.csv 第一列共有 {len(refined_ids)} 条")
+    print(f"[INFO] refined_set_list.csv 第一列共有 {len(refined_only_ids)} 条")
     print(f"[INFO] core_set_list.csv 第一列共有 {len(core_ids)} 条")
     print()
 
-    refined_feat_dir = FEATURE_CACHE / "refined"
+    refined_only_feat_dir = FEATURE_CACHE / "refined_only"
     core_feat_dir = FEATURE_CACHE / "core"
 
-    refined_feat_ids = set(extract_pdbid_from_feature(f.name)
-                           for f in refined_feat_dir.glob("*.npy"))
+    refined_only_feat_ids = set(extract_pdbid_from_feature(f.name)
+                           for f in refined_only_feat_dir.glob("*.npy"))
     core_feat_ids = set(extract_pdbid_from_feature(f.name)
                         for f in core_feat_dir.glob("*.npy"))
 
-    print(f"[INFO] feature_cache/refined 中共有 {len(refined_feat_ids)} 个 pdbid")
+    print(f"[INFO] feature_cache/refined_only 中共有 {len(refined_only_feat_ids)} 个 pdbid")
     print(f"[INFO] feature_cache/core 中共有 {len(core_feat_ids)} 个 pdbid")
     print()
 
     # -------------------------------------------------------
-    # 1) refined 中检查不一致
+    # 1) refined_only 中检查不一致
     # -------------------------------------------------------
     print("====== 检查 refined 集 ======")
 
-    extra_refined = refined_feat_ids - refined_ids
+    extra_refined = refined_only_feat_ids - refined_only_ids
     if extra_refined:
-        print("[WARNING] refined feature_cache 中存在 csv 未列出的 pdbid：")
+        print("[WARNING] refined_only feature_cache 中存在 csv 未列出的 pdbid：")
         print(len(extra_refined), "个额外 pdbid：")
         # for x in sorted(extra_refined):
         #     print("   +", x)
     else:
-        print("[OK] refined feature_cache 与 refined csv 一致，没有额外 pdbid。")
+        print("[OK] refined_only feature_cache 与 refined_only csv 一致，没有额外 pdbid。")
 
-    missing_refined = refined_ids - refined_feat_ids
+    missing_refined = refined_only_ids - refined_only_feat_ids
     if missing_refined:
-        print("[WARNING] refined csv 中存在未生成 feature 的 pdbid：")
+        print("[WARNING] refined_only csv 中存在未生成 feature 的 pdbid：")
         print(len(missing_refined), "个缺失 pdbid：")
         # for x in sorted(missing_refined):
         #     print("   -", x)
     else:
-        print("[OK] refined csv 中所有 pdbid 都有 feature。")
+        print("[OK] refined_only csv 中所有 pdbid 都有 feature。")
 
     print()
 
@@ -100,16 +100,16 @@ def main():
     print()
 
     # -------------------------------------------------------
-    # 3) refined / core 是否有重叠（通常应该无重复）
+    # 3) refined_only / core 是否有重叠（通常应该无重复）
     # -------------------------------------------------------
-    overlap = refined_ids & core_ids
+    overlap = refined_only_ids & core_ids
     if overlap:
-        print("[WARNING] refined_set_list 与 core_set_list 有重叠 pdbid：")
+        print("[WARNING] refined_only_set_list 与 core_set_list 有重叠 pdbid：")
         print(len(overlap), "个重叠 pdbid：")
         # for x in sorted(overlap):
         #     print("   *", x)
     else:
-        print("[OK] refined 与 core 集完全不重叠。")
+        print("[OK] refined_only 与 core 集完全不重叠。")
 
     print()
     print("检查完成。")
