@@ -18,6 +18,9 @@ data/raw/
 data/interim/
 data/processed/*/structures/
 data/processed/feature_cache
+*.csv
+*.npy
+*.npz
 
 # 模型
 models/

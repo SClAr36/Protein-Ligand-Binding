@@ -41,7 +41,7 @@ tau = 1.0
 cutoff_list = list(range(5, 51))   # [5,50]
 max_cutoff_global = max(cutoff_list)
 
-repeat_times = 5
+repeat_times = 1
 
 N_JOBS_CPU = 8   # 物理核心 8，逻辑 16
 
@@ -51,7 +51,7 @@ N_JOBS_CPU = 8   # 物理核心 8，逻辑 16
 print(f"\n==== STEP 1: Precompute (alpha={alpha}, beta={beta}, tau={tau}, cmax={max_cutoff_global}) ====\n")
 
 precompute_pair_cache_for_set(
-    set_type="refined",
+    set_type="refined_only",
     alpha=alpha,
     beta=beta,
     tau=tau,
@@ -78,7 +78,7 @@ def train_and_eval(cutoff, repeat):
 
     # 加载缓存构建好的特征（极快）
     X_train, y_train, _ = build_dataset(
-        "refined", alpha, beta, tau, cutoff,
+        "refined_only", alpha, beta, tau, cutoff,
         use_cache=True, max_cutoff_global=max_cutoff_global
     )
     X_test, y_test, ids_test = build_dataset(
@@ -88,17 +88,33 @@ def train_and_eval(cutoff, repeat):
 
     models = {
         "rf": RandomForestRegressor(
-            n_estimators=300,
+            n_estimators=650,       # Enough for full convergence
+            max_depth=20,           # Slightly deeper with 3600 samples
+            min_samples_leaf=3,     # Good bias-variance balance for 3600 samples
+            max_features="sqrt",    # √36 = 6 → best empirical choice
+            bootstrap=True,
             n_jobs=-1,
             random_state=repeat,
         ),
+
         "lgb": lgb.LGBMRegressor(
-            n_estimators=1500,
-            learning_rate=0.03,
-            max_depth=-1,
-            num_leaves=55,
-            n_jobs=-1,
             boosting_type="gbdt",
+            objective="regression",
+
+            n_estimators=1300,
+            learning_rate=0.035,
+
+            num_leaves=48,
+            max_depth=-1,
+
+            min_child_samples=10,        # 用这个，不用 min_data_in_leaf
+            subsample=0.9,               # 保留 subsample
+            subsample_freq=1,            # 保留 subsample_freq
+            colsample_bytree=0.9,        # 保留 colsample_bytree
+            reg_lambda=0.1,              # 使用 reg_lambda 替代 lambda_l2
+            min_split_gain=0.0,          # 使用 min_split_gain 替代 min_gain_to_split
+
+            n_jobs=-1,
             random_state=repeat,
         ),
     }
@@ -109,9 +125,6 @@ def train_and_eval(cutoff, repeat):
     for model_name, model in models.items():
         print(f"  -> Fitting {model_name} (CPU)...")
         model.fit(X_train, y_train)
-
-        model_path = MODEL_DIR / f"{model_name}_{tag}.pkl"
-        joblib.dump(model, model_path)
 
         y_pred = model.predict(X_test)
         pearson = pearsonr(y_test, y_pred)[0]
@@ -135,53 +148,34 @@ def train_and_eval(cutoff, repeat):
 
 if __name__ == "__main__":
 
-    # === 加载训练进度断点 ===
-    def load_progress():
-        if not PROGRESS_LOG.exists():
-            return set()
-        done = set()
-        with open(PROGRESS_LOG, "r") as f:
-            for line in f:
-                try:
-                    r, c = map(int, line.split())
-                    done.add((r, c))
-                except:
-                    pass
-        return done
+    out_csv = MODEL_DIR / f"results_cutoff_{alpha}.csv"
 
-    done_set = load_progress()
-
-    all_records = []
+    # === 断点恢复：读取已有 CSV 作为已完成记录 ===
+    if out_csv.exists():
+        df_done = pd.read_csv(out_csv)
+        done_set = set(zip(df_done["repeat"], df_done["cutoff"]))
+    else:
+        done_set = set()
 
     print(f"\n==== STEP 2: Sweeping Cutoff ====\n")
 
     for repeat in range(repeat_times):
         for cutoff in cutoff_list:
 
-            # === 断点恢复：若已完成则跳过 ===
             if (repeat, cutoff) in done_set:
                 print(f"[跳过] 已完成 repeat={repeat}, cutoff={cutoff}")
                 continue
 
             rec = train_and_eval(cutoff, repeat)
-
             if rec is None:
-                print(f"[错误] 训练失败于 repeat={repeat}, cutoff={cutoff}，已中断")
-                with open(MODEL_DIR / "training_error.log", "a") as f:
-                    f.write(f"{repeat} {cutoff}\n")
-                raise RuntimeError(f"训练中断于 repeat={repeat}, cutoff={cutoff}")
+                raise RuntimeError(f"训练失败于 repeat={repeat}, cutoff={cutoff}")
 
-
-            # === 成功则记录日志 ===
-            with open(PROGRESS_LOG, "a") as f:
-                f.write(f"{repeat} {cutoff}\n")
-
-            # === 成功则追加到结果缓存 ===
-            all_records.extend(rec)
-
-
-    out_csv = MODEL_DIR / f"results_cutoff_{alpha}.csv"
-    pd.DataFrame(all_records).to_csv(out_csv, index=False)
+            # === 每个 cutoff 训练成功立即写 CSV ===
+            df_tmp = pd.DataFrame(rec)
+            if out_csv.exists():
+                df_tmp.to_csv(out_csv, mode="a", header=False, index=False)
+            else:
+                df_tmp.to_csv(out_csv, index=False)
 
     print(f"\nTraining finished (alpha={alpha}).")
     print(f"Results saved to: {out_csv}")

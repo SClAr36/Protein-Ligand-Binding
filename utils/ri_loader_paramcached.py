@@ -12,8 +12,6 @@ from utils.RI_score import (
 
 # ================== 路径设置 ==================
 # 当前：所有东西都放在项目根目录下的 data/ 里
-# 将来如果你想把 data 挂到外接 SSD，只需要改这一行：
-#   比如改成：DATA_ROOT = Path("/mnt/data_ext/ProLig/data")
 ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = ROOT / "data"
 
@@ -25,32 +23,44 @@ INTERIM.mkdir(exist_ok=True)
 FEATURE_CACHE_DIR = PROCESSED / "feature_cache"
 FEATURE_CACHE_DIR.mkdir(exist_ok=True)
 
+FEATURE_CACHE_REFINED_DIR = FEATURE_CACHE_DIR / "refined_only"
+FEATURE_CACHE_REFINED_DIR.mkdir(exist_ok=True)
+FEATURE_CACHE_CORE_DIR = FEATURE_CACHE_DIR / "core"
+FEATURE_CACHE_CORE_DIR.mkdir(exist_ok=True)
+
 # pair 级别 φ 预计算缓存目录：按 (pdbid, alpha, beta, tau, max_cutoff_global) 区分
 PAIR_CACHE_DIR = INTERIM / "ri_pair_param_cache"
 PAIR_CACHE_DIR.mkdir(exist_ok=True)
 
 
-def _feature_cache_path(pdbid: str, alpha: str, beta: float, tau: float, cutoff: float) -> Path:
+def _fmt(x: float) -> str:
+    """
+    格式化参数，避免科学计数法，同时去掉无意义的尾随 0 和点号。
+    """
+    return f"{x:.6f}".rstrip("0").rstrip(".")
+
+
+def _feature_cache_path(set_type: str, pdbid: str, alpha: str,
+                        beta: float, tau: float, cutoff: float) -> Path:
     """
     生成某个复合物在特定 RI 参数 + cutoff 下的最终 36 维特征缓存路径。
     """
-    tag = f"a{alpha}_b{beta:g}_t{tau:g}_c{cutoff:g}"
-    return FEATURE_CACHE_DIR / f"{pdbid}_{tag}.npy"
+    tag = f"a{alpha}_b{_fmt(beta)}_t{_fmt(tau)}_c{_fmt(cutoff)}"
+    return FEATURE_CACHE_DIR / set_type / f"{pdbid}_{tag}.npy"
 
 
-def _pair_cache_path(
-    pdbid: str,
-    alpha: str,
-    beta: float,
-    tau: float,
-    max_cutoff_global: float,
-) -> Path:
+def _pair_cache_path(pdbid: str, alpha: str, beta: float, tau: float,
+                     max_cutoff_global: float) -> Path:
     """
-    生成某个复合物在 (alpha, beta, tau, max_cutoff_global) 下的 φ 预计算缓存路径。
+    生成某个复合物在指定参数下的 φ 预计算缓存路径。
     文件名显式带上 max_cutoff_global，避免未来更大 cutoff 时产生混淆。
     """
-    tag = f"a{alpha}_b{beta:g}_t{tau:g}_cmax{max_cutoff_global:g}"
+    tag = (
+        f"a{alpha}_b{_fmt(beta)}_t{_fmt(tau)}"
+        f"_cmax{_fmt(max_cutoff_global)}"
+    )
     return PAIR_CACHE_DIR / f"{pdbid}_{tag}.npz"
+
 
 
 def _load_structure_npz(set_type: str, pdbid: str) -> dict:
@@ -149,7 +159,7 @@ def load_feature(
             原子写回最终 36 维缓存文件（避免半写入导致损坏）
     """
 
-    feat_cache_file = _feature_cache_path(pdbid, alpha, beta, tau, cutoff)
+    feat_cache_file = _feature_cache_path(set_type, pdbid, alpha, beta, tau, cutoff)
 
     # ========= Step A: 尝试加载最终特征缓存 =========
     if use_cache and feat_cache_file.exists():
@@ -186,8 +196,7 @@ def load_feature(
         if np.any(mask):
             np.add.at(RI, idx_valid[mask], phi_valid[mask])
 
-    # ========= Step D: 原子写回 =========
-    # ========== D. 写缓存：使用老版本 np.save ==========
+    # ========= Step D: 写缓存 =========
     if use_cache:
         try:
             np.save(str(feat_cache_file), RI)
@@ -195,7 +204,6 @@ def load_feature(
             print(f"[错误] np.save 写缓存失败: {feat_cache_file} ({e})")
             # 写失败也返回，训练不中断
             return RI
-
 
     return RI
 
@@ -221,7 +229,7 @@ def build_dataset(
         - 非 None: 推荐设为本轮 sweep 的 max(cutoff_list)，
           这样同一组 (alpha,beta,tau) 下所有 cutoff 都可以重用 pair 缓存。
     """
-    assert set_type in ["refined", "core"], "set_type 必须是 'refined' 或 'core'"
+    assert set_type in ["refined_only", "core"], "set_type 必须是 'refined_only' 或 'core'"
 
     csv_file = PROCESSED / set_type / f"{set_type}_set_list.csv"
     df = pd.read_csv(csv_file)
@@ -270,7 +278,7 @@ def precompute_pair_cache_for_set(
 
         max_cutoff_global = max(cutoff_list)
         precompute_pair_cache_for_set(
-            set_type="refined",
+            set_type="refined_only",
             alpha="exp",
             beta=2.5,
             tau=1.0,
@@ -280,7 +288,7 @@ def precompute_pair_cache_for_set(
 
     然后再跑训练时，build_dataset/load_feature 都能直接命中 pair 缓存。
     """
-    assert set_type in ["refined", "core"], "set_type 必须是 'refined' 或 'core'"
+    assert set_type in ["refined_only", "core"], "set_type 必须是 'refined_only' 或 'core'"
 
     csv_file = PROCESSED / set_type / f"{set_type}_set_list.csv"
     df = pd.read_csv(csv_file)

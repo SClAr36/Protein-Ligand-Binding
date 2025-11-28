@@ -50,7 +50,7 @@ def precompute_phi_pairs(
     max_cutoff = float(max_cutoff)
 
     # 距离矩阵 [N_pro, N_lig]
-    dist = cdist(pro_coords, lig_coords).astype(np.float32)
+    dist = cdist(pro_coords, lig_coords)
 
     # 元素 -> 索引
     pro_idx = np.array([PRO_INDEX.get(e, -1) for e in pro_elems], dtype=np.int16)
@@ -66,8 +66,8 @@ def precompute_phi_pairs(
     cutoff_valid = dist <= max_cutoff
 
     # vdW 半径
-    r_i = np.array([VDW_RADII.get(e, np.nan) for e in pro_elems], dtype=np.float32)  # [N_pro]
-    r_j = np.array([VDW_RADII.get(e, np.nan) for e in lig_elems], dtype=np.float32)  # [N_lig]
+    r_i = np.array([VDW_RADII.get(e, np.nan) for e in pro_elems])  # [N_pro]
+    r_j = np.array([VDW_RADII.get(e, np.nan) for e in lig_elems])  # [N_lig]
     eta = tau * (r_i[:, None] + r_j[None, :])  # [N_pro, N_lig]
 
     eta_valid = np.isfinite(eta) & (eta > 0.0)
@@ -77,19 +77,19 @@ def precompute_phi_pairs(
     if not np.any(valid):
         return (
             np.zeros((0,), dtype=np.int16),
-            np.zeros((0,), dtype=np.float32),
-            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,)),
+            np.zeros((0,)),
         )
 
     # 只在 valid 的位置上计算 (d/eta)^beta
-    x = np.zeros_like(dist, dtype=np.float32)
+    x = np.zeros_like(dist)
     x[valid] = (dist[valid] / eta[valid]) ** beta
 
     if alpha == "exp":
-        phi = np.zeros_like(dist, dtype=np.float32)
-        phi[valid] = np.exp(-x[valid], dtype=np.float32)
+        phi = np.zeros_like(dist)
+        phi[valid] = np.exp(-x[valid])
     elif alpha == "lor":
-        phi = np.zeros_like(dist, dtype=np.float32)
+        phi = np.zeros_like(dist)
         phi[valid] = 1.0 / (1.0 + x[valid])
     else:
         raise ValueError("alpha must be 'exp' or 'lor'.")
@@ -108,8 +108,8 @@ def precompute_phi_pairs(
     flat_phi = phi.ravel()[flat_valid]
 
     idx_valid = flat_idx.astype(np.int16)
-    dist_valid = flat_dist.astype(np.float32)
-    phi_valid = flat_phi.astype(np.float32)
+    dist_valid = flat_dist
+    phi_valid = flat_phi
 
     return idx_valid, dist_valid, phi_valid
 
