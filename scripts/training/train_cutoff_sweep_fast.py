@@ -34,7 +34,7 @@ PROGRESS_LOG = MODEL_DIR / "training_progress.log"
 # =====================================
 # 参数配置（你以后会修改这里）
 # =====================================
-alpha = "exp"
+alpha = "lor"
 beta = 2.5 if alpha == "exp" else 5.0
 tau = 1.0
 

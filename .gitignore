@@ -31,6 +31,10 @@ figs/
 *.png
 *.pdf
 
+# 训练记录
+logs/
+*.md
+
 # 日志
 *.log
 

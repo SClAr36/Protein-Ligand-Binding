@@ -11,18 +11,25 @@ CACHE_DIR = ROOT
 
 # 自定义距离区间 (包含右，不包含左)
 # 即 (0,5], (5,10], ..., (40,50]
-BINS = [(0, 5), (5, 10), (10, 20), (20, 30), (30, 40), (40, 50)]
+BINS = [(0, 0),
+        (0, 5),
+        (5, 10),
+        (10, 20),
+        (20, 30),
+        (30, 40),
+        (40, 50),
+        (50, np.inf)]   # <-- 新增
 
 
 # =========================================
 # 工具函数：读取 npz / npy 中的 dist_valid
 # =========================================
-def load_dist_valid(path: Path):
+def load_feature(path: Path, feature: str = "dist_valid") -> np.ndarray:
     """自动支持 .npz 或 .npy"""
     if path.suffix == ".npz":
         data = np.load(path)
-        if "dist_valid" in data:
-            return data["dist_valid"]
+        if feature in data:
+            return data[feature]
         else:
             raise KeyError(f"{path} 中没有 dist_valid 键")
     elif path.suffix == ".npy":
@@ -37,15 +44,21 @@ def load_dist_valid(path: Path):
 def histogram_by_bins(dist_array):
     counts = []
     for lo, hi in BINS:
-        mask = (dist_array > lo) & (dist_array <= hi)
+        if lo == 0 and hi == 0:
+            # 专门统计 "== 0"
+            mask = (dist_array == 0)
+        else:
+            # 正常区间统计 (lo, hi]
+            mask = (dist_array > lo) & (dist_array <= hi)
         counts.append(mask.sum())
     return np.array(counts)
+
 
 
 # =========================================
 # 模式一：检查某个 pdbid 的距离分布
 # =========================================
-def inspect_single_pdb(pdbid: str):
+def inspect_single_pdb(pdbid: str, feature: str = "dist_valid"):
     """抽查某 pdbid 的 dist_valid 落在各区间的数量和占比"""
     # 找文件
     matches = list(CACHE_DIR.glob(f"{pdbid}_aexp_b2.5_t1_cmax50.*"))
@@ -53,16 +66,16 @@ def inspect_single_pdb(pdbid: str):
         raise FileNotFoundError(f"找不到 {pdbid} 对应的缓存文件")
 
     path = matches[0]
-    dist_valid = load_dist_valid(path)
+    dist_valid = load_feature(path, feature=feature)
 
-    print(f"[INFO] 加载 {pdbid} 的 dist_valid, 数量={len(dist_valid)}")
+    print(f"[INFO] 加载 {pdbid} 的 {feature}, 数量={len(dist_valid)}")
 
     counts = histogram_by_bins(dist_valid)
     total = len(dist_valid)
     percents = counts / total * 100
 
     df = pd.DataFrame({
-        "bin": [f"({lo},{hi}]" for lo, hi in BINS],
+        "bin": [f"({lo},{'+inf' if hi==np.inf else hi}]" for lo, hi in BINS],
         "count": counts,
         "percent": percents,
     })
@@ -74,7 +87,7 @@ def inspect_single_pdb(pdbid: str):
 # =========================================
 # 模式二：统计全部 pdbid 的合并分布
 # =========================================
-def inspect_all_pdb():
+def inspect_all_pdb(feature: str = "dist_valid"):
     """统计整个文件夹所有 pdb 的 dist_valid，总体分布占比"""
     files = list(CACHE_DIR.glob("*.np*"))
     if not files:
@@ -85,7 +98,7 @@ def inspect_all_pdb():
 
     for f in files:
         try:
-            dist_valid = load_dist_valid(f)
+            dist_valid = load_feature(f, feature=feature)
         except Exception as e:
             print(f"[WARN] 跳过文件 {f}: {e}")
             continue
@@ -97,7 +110,7 @@ def inspect_all_pdb():
     percents = total_counts / total_n * 100
 
     df = pd.DataFrame({
-        "bin": [f"({lo},{hi}]" for lo, hi in BINS],
+        "bin": [f"({lo},{'+inf' if hi==np.inf else hi}]" for lo, hi in BINS],
         "count": total_counts,
         "percent": percents,
     })
@@ -111,14 +124,15 @@ def inspect_all_pdb():
 # 主函数示例（你可以自由修改）
 # =========================================
 if __name__ == "__main__":
-    mode = "all"   # "single" 或 "all"
+    mode = "single"   # "single" 或 "all"
+    feature = "phi_valid"   # "dist_valid" 或 "phi_valid" 或 "idx_valid"
 
     if mode == "single":
         pdbid = "1a1e"      # <- 在这里填你想检查的 pdbid
-        inspect_single_pdb(pdbid)
+        inspect_single_pdb(pdbid, feature)
 
     elif mode == "all":
-        inspect_all_pdb()
+        inspect_all_pdb(feature)
 
     else:
         raise ValueError("mode 必须是 'single' 或 'all'")
