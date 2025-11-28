@@ -27,7 +27,7 @@ def load_cutoff_series(pdbid, set_type="refined_only"):
     return X
 
 # ====== 你想看的 PDBID ======
-pdbid = "1a1e"   # 替换成你自己的
+pdbid = "4eu0"   # 替换成你自己的
 
 X = load_cutoff_series(pdbid)
 

@@ -27,6 +27,16 @@ VDW_RADII = {
 PRO_INDEX = {e: i for i, e in enumerate(PRO_ELEMENTS)}
 LIG_INDEX = {e: j for j, e in enumerate(LIG_ELEMENTS)}
 
+# 构建 PRO x LIG 的 r_sum lookup: 长度 36
+R_SUM_TABLE = np.zeros(FEATURE_DIM, dtype=np.float64)  # FEATURE_DIM = 36
+
+for i, pe in enumerate(PRO_ELEMENTS):
+    r_i = VDW_RADII.get(pe, np.nan)
+    for j, le in enumerate(LIG_ELEMENTS):
+        r_j = VDW_RADII.get(le, np.nan)
+        idx = i * N_LIG + j
+        R_SUM_TABLE[idx] = r_i + r_j
+
 
 def precompute_phi_pairs(
     pro_coords: np.ndarray,
@@ -112,6 +122,55 @@ def precompute_phi_pairs(
     phi_valid = flat_phi
 
     return idx_valid, dist_valid, phi_valid
+
+def precompute_dist_ratio_pairs(
+    pro_coords: np.ndarray,
+    pro_elems: np.ndarray,
+    lig_coords: np.ndarray,
+    lig_elems: np.ndarray,
+):
+    """
+    计算单个 complex 中有效的 protein-ligand 原子对：
+        idx_valid   : (K,) int16
+        dist_valid  : (K,) float64
+        ratio_valid : (K,) float64 = dist / r_sum
+    
+    r_sum 根据 idx_valid 直接由 R_SUM_TABLE 得到。
+    """
+
+    # 距离矩阵 [N_pro, N_lig]
+    dist = cdist(pro_coords, lig_coords)  # float64
+
+    # protein / ligand 元素 -> 索引（-1 表示该元素不在 PRO / LIG 集）
+    pro_idx = np.array([PRO_INDEX.get(e, -1) for e in pro_elems], dtype=np.int16)
+    lig_idx = np.array([LIG_INDEX.get(e, -1) for e in lig_elems], dtype=np.int16)
+
+    pi = pro_idx[:, None]      # [Np, 1]
+    lj = lig_idx[None, :]      # [1, Nl]
+
+    elem_valid = (pi >= 0) & (lj >= 0)
+
+    # 计算 pair index = i*N_LIG + j
+    pair_idx = pi * N_LIG + lj       # [Np, Nl], int16
+    pair_idx[~elem_valid] = -1       # 无效元素设 -1
+
+    # 拉平
+    flat_idx = pair_idx.ravel()
+    flat_dist = dist.ravel()
+
+    # 只取有效 idx
+    valid_mask = flat_idx >= 0
+
+    idx_valid = flat_idx[valid_mask].astype(np.int16)
+    dist_valid = flat_dist[valid_mask]
+
+    # 查 lookup 表获得每个 pair 的 r_sum
+    r_sum = R_SUM_TABLE[idx_valid]  # (K,)
+
+    # ratio = dist / r_sum
+    ratio_valid = dist_valid / r_sum
+
+    return idx_valid, dist_valid, ratio_valid
 
 
 def compute_RI_score_general(
