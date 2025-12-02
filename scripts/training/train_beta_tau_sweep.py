@@ -236,6 +236,7 @@ for repeat in range(repeat_times):
         for tau in tau_list:
 
             # RF
+            print(f"\n[Training] RF: alpha={alpha}, beta={beta}, tau={tau}, repeat={repeat}")
             tag_rf = (beta, tau, repeat, "rf")
             if tag_rf not in done_set:
                 rec_rf = train_rf(alpha, beta, tau, cutoff, repeat)

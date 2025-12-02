@@ -2,9 +2,10 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
+from joblib import Parallel, delayed
 
 # 从 RI_score 导入你已有的几何函数
-from utils.RI_score import compute_dist_ratio_pairs, FEATURE_DIM
+from utils.RI_score import precompute_dist_ratio_pairs, FEATURE_DIM
 
 # ================== 路径设置 ==================
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,7 +71,7 @@ def _load_or_build_pair_cache(set_type: str, pdbid: str, use_cache: bool = True)
     npz_path = PROCESSED / set_type / "structures" / f"{pdbid}.npz"
     data = np.load(npz_path)
 
-    idx_valid, dist_valid, ratio_valid = compute_dist_ratio_pairs(
+    idx_valid, dist_valid, ratio_valid = precompute_dist_ratio_pairs(
         pro_coords=data["pro_coords"],
         pro_elems=data["pro_elems"],
         lig_coords=data["lig_coords"],
@@ -86,6 +87,51 @@ def _load_or_build_pair_cache(set_type: str, pdbid: str, use_cache: bool = True)
         )
 
     return idx_valid, dist_valid, ratio_valid
+
+def precompute_pair_cache_for_set(
+    set_type: str,
+    use_cache: bool = True,
+    n_jobs: int = 1,
+):
+    """
+    geomcached 版本的批量预计算 ratio cache：
+    - 只依赖结构，与 (alpha, beta, tau, cutoff) 无关；
+    - 对某个 set_type ('refined_only' 或 'core') 下所有 pdbid，
+      调用一次 _load_or_build_pair_cache；
+    - 每个 pdbid：
+        * 若 cache 已存在且 use_cache=True → 直接返回；
+        * 否则从 structures 计算，并写入
+          interim/ri_pair_geom_cache/<set_type>/<pdbid>_pairs.npz
+    """
+
+    assert set_type in ["refined_only", "core"], \
+        "set_type 必须是 'refined_only' 或 'core'"
+
+    csv_path = PROCESSED / set_type / f"{set_type}_set_list.csv"
+    df = pd.read_csv(csv_path)
+    pdbids = df["pdbid"].tolist()
+
+    def _worker(pdbid: str):
+        _load_or_build_pair_cache(
+            set_type=set_type,
+            pdbid=pdbid,
+            use_cache=use_cache,
+        )
+
+    desc = f"Precomputing GEOM ratio cache for {set_type}"
+
+    if n_jobs == 1:
+        # 串行，方便 debug
+        for pdbid in tqdm(pdbids, desc=desc):
+            _worker(pdbid)
+    else:
+        # 并行
+        Parallel(n_jobs=n_jobs)(
+            delayed(_worker)(pdbid)
+            for pdbid in tqdm(pdbids, desc=desc)
+        )
+
+    print(f"[完成] geomcached ratio pair cache: set_type={set_type}, N={len(pdbids)}")
 
 
 # ================== φ(alpha,beta,tau) ==================
