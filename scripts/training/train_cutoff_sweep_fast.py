@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr
 
@@ -34,7 +35,7 @@ PROGRESS_LOG = MODEL_DIR / "training_progress.log"
 # =====================================
 # 参数配置（你以后会修改这里）
 # =====================================
-alpha = "lor"
+alpha = "exp"
 beta = 2.5 if alpha == "exp" else 5.0
 tau = 1.0
 
@@ -68,7 +69,6 @@ precompute_pair_cache_for_set(
     n_jobs=N_JOBS_CPU,
 )
 
-
 # =====================================
 # Step 2: Sweep cutoff & Train models
 # =====================================
@@ -94,28 +94,30 @@ def train_and_eval(cutoff, repeat):
             max_features="sqrt",    # √36 = 6 → best empirical choice
             bootstrap=True,
             n_jobs=-1,
-            random_state=repeat,
+            #random_state=repeat,
         ),
 
-        "lgb": lgb.LGBMRegressor(
-            boosting_type="gbdt",
-            objective="regression",
+        "lgb": XGBRegressor(
+            # ---- 结构参数 ----
+            n_estimators=1400,
+            learning_rate=0.03,
+            max_depth=8,
+            min_child_weight=1.0,
+            reg_lambda=0.2,
 
-            n_estimators=1300,
-            learning_rate=0.035,
+            # ---- 随机性增强（CPU 安全版）----
+            subsample=0.75,              # 样本随机性
+            colsample_bytree=0.75,       # 树级随机性
+            colsample_bylevel=0.7,       # 层级随机性（非常有效）
+            colsample_bynode=0.7,        # 节点级随机性（非常有效）
 
-            num_leaves=48,
-            max_depth=-1,
+            # ---- histogram 随机性 & split 噪声 ----
+            max_bin=128,                 # 打破 split 的确定性
+            max_delta_step=2,            # 让 leaf value 加少量噪声（增强变异）
 
-            min_child_samples=10,        # 用这个，不用 min_data_in_leaf
-            subsample=0.9,               # 保留 subsample
-            subsample_freq=1,            # 保留 subsample_freq
-            colsample_bytree=0.9,        # 保留 colsample_bytree
-            reg_lambda=0.1,              # 使用 reg_lambda 替代 lambda_l2
-            min_split_gain=0.0,          # 使用 min_split_gain 替代 min_gain_to_split
-
+            # ---- 基础 ----
+            tree_method="hist",
             n_jobs=-1,
-            random_state=repeat,
         ),
     }
 
