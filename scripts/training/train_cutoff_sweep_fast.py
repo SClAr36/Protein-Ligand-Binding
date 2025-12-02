@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from sklearn.ensemble import RandomForestRegressor
-from xgboost import XGBRegressor
+import xgboost as xgb
 from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr
 from joblib import Parallel, delayed
@@ -36,7 +36,7 @@ PROGRESS_LOG = MODEL_DIR / "training_progress.log"
 # =====================================
 # 参数配置（你以后会修改这里）
 # =====================================
-alpha = "exp"
+alpha = "lor"
 beta = 2.5 if alpha == "exp" else 5.0
 tau = 1.0
 
@@ -117,77 +117,92 @@ Parallel(n_jobs=N_JOBS_CPU)(
 # =====================================
 
 def train_and_eval(cutoff, repeat):
-    print(f"\n=== Training {alpha} (repeat={repeat}): cutoff={cutoff} ===")
+    """
+    按 cutoff 训练一个 RF + 一个 XGB（GPU）
+    —— 保持旧结构（方案 A），不拆分函数。
+    """
 
-    # 用提前构建好的大矩阵（极快）
+    print(f"\n=== Training cutoff={cutoff}, repeat={repeat} ===\n")
+
+    # ---------------------------------------------
+    # 1. 加载大矩阵 (你的新版方式)
+    # ---------------------------------------------
     X_train, y_train, _ = load_dataset_bigmatrix(
         "refined_only", alpha, beta, tau, cutoff
     )
     X_test, y_test, _ = load_dataset_bigmatrix(
         "core", alpha, beta, tau, cutoff
     )
-    print(f"  Training samples: {X_train.shape[0]}, Test samples: {X_test.shape[0]}")
 
-    models = {
-        "rf": RandomForestRegressor(
-            n_estimators=650,       # Enough for full convergence
-            max_depth=20,           # Slightly deeper with 3600 samples
-            min_samples_leaf=3,     # Good bias-variance balance for 3600 samples
-            max_features="sqrt",    # √36 = 6 → best empirical choice
-            bootstrap=True,
-            n_jobs=-1,
-            #random_state=repeat,
-        ),
+    records = []
 
-        "lgb": XGBRegressor(
-            # ---- 结构参数 ----
-            n_estimators=1400,
-            learning_rate=0.03,
-            max_depth=8,
-            min_child_weight=1.0,
-            reg_lambda=0.2,
+    # ---------------------------------------------
+    # 2. RF (CPU) —— 保持和原来完全一致
+    # ---------------------------------------------
+    print("  -> Fitting RF (CPU)...")
 
-            # ---- 随机性增强（CPU 安全版）----
-            subsample=0.75,              # 样本随机性
-            colsample_bytree=0.75,       # 树级随机性
-            colsample_bylevel=0.7,       # 层级随机性（非常有效）
-            colsample_bynode=0.7,        # 节点级随机性（非常有效）
+    rf = RandomForestRegressor(
+        n_estimators=650,
+        max_depth=20,
+        min_samples_leaf=3,
+        max_features="sqrt",
+        n_jobs=-1,
+    )
+    rf.fit(X_train, y_train)
 
-            # ---- histogram 随机性 & split 噪声 ----
-            max_bin=128,                 # 打破 split 的确定性
-            max_delta_step=2,            # 让 leaf value 加少量噪声（增强变异）
+    pred_rf = rf.predict(X_test)
 
-            # ---- 基础 ----
-            tree_method="hist",
-            n_jobs=-1,
-        ),
+    Rp_rf = pearsonr(y_test, pred_rf)[0]
+    RMSE_rf = np.sqrt(mean_squared_error(y_test, pred_rf))
+
+    print(f"     RF: Rp={Rp_rf:.4f}, RMSE={RMSE_rf:.4f}")
+
+    records.append({
+        "cutoff": cutoff,
+        "repeat": repeat,
+        "model": "rf",
+        "pearson": Rp_rf,
+        "rmse": RMSE_rf,
+    })
+
+    # ---------------------------------------------
+    # 3. XGBoost (GPU) —— 新增 GPU 训练
+    # ---------------------------------------------
+    print("  -> Fitting XGB (GPU)...")
+
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtest  = xgb.DMatrix(X_test, label=y_test)
+
+    params = {
+        "tree_method": "hist",
+        "device": "cuda",     # GPU 就靠这个
+        "max_depth": 8,
+        "eta": 0.03,
+        "lambda": 0.2,
+        "subsample": 0.75,
+        "colsample_bytree": 0.75,
+        "max_bin": 128,
+        "objective": "reg:squarederror",
     }
 
-    tag = f"a{alpha}_b{beta}_t{tau}_c{cutoff}_r{repeat}"
-    results = []
+    booster = xgb.train(params, dtrain, num_boost_round=1400)
 
-    for model_name, model in models.items():
-        print(f"  -> Fitting {model_name} (CPU)...")
-        model.fit(X_train, y_train)
+    pred_xgb = booster.predict(dtest)
 
-        y_pred = model.predict(X_test)
-        pearson = pearsonr(y_test, y_pred)[0]
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    Rp_xgb = pearsonr(y_test, pred_xgb)[0]
+    RMSE_xgb = np.sqrt(mean_squared_error(y_test, pred_xgb))
 
-        print(f"     {model_name}: Rp={pearson:.4f}  RMSE={rmse:.4f}")
+    print(f"     XGB(GPU): Rp={Rp_xgb:.4f}, RMSE={RMSE_xgb:.4f}")
 
-        results.append({
-            "model": model_name,
-            "alpha": alpha,
-            "beta": beta,
-            "tau": tau,
-            "cutoff": cutoff,
-            "repeat": repeat,
-            "pearson": pearson,
-            "rmse": rmse,
-        })
+    records.append({
+        "cutoff": cutoff,
+        "repeat": repeat,
+        "model": "xgb-gpu",
+        "pearson": Rp_xgb,
+        "rmse": RMSE_xgb,
+    })
 
-    return results
+    return records
 
 
 if __name__ == "__main__":
