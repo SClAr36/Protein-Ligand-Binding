@@ -49,7 +49,7 @@ MODEL_DIR.mkdir(exist_ok=True)
 # 参数区
 # ============================================================
 
-alpha = "exp"
+alpha = "lor"
 
 # beta: 0.5 → 6.0（含闭区间）
 beta_list = np.arange(0.5, 6.0 + 1e-9, 0.5).round(2)
@@ -238,7 +238,9 @@ for repeat in range(repeat_times):
             # RF
             print(f"\n[Training] RF: alpha={alpha}, beta={beta}, tau={tau}, repeat={repeat}")
             tag_rf = (beta, tau, repeat, "rf")
-            if tag_rf not in done_set:
+            if tag_rf in done_set:
+                print("tag_rf already done, skipping...")
+            else:
                 rec_rf = train_rf(alpha, beta, tau, cutoff, repeat)
                 pd.DataFrame([rec_rf]).to_csv(
                     out_csv, mode="a",
@@ -248,7 +250,9 @@ for repeat in range(repeat_times):
 
             # XGB（GPU）
             tag_xgb = (beta, tau, repeat, "xgb-gpu")
-            if tag_xgb not in done_set:
+            if tag_xgb in done_set:
+                print("tag_xgb already done, skipping...")
+            else:
                 rec_xgb = train_xgb_gpu(alpha, beta, tau, cutoff, repeat)
                 pd.DataFrame([rec_xgb]).to_csv(
                     out_csv, mode="a",
