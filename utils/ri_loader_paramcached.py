@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-import os
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
@@ -10,8 +9,7 @@ from utils.RI_score import (
     FEATURE_DIM,
 )
 
-# ================== 路径设置 ==================
-# 当前：所有东西都放在项目根目录下的 data/ 里
+# ================== 路径 ==================
 ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = ROOT / "data"
 
@@ -19,34 +17,21 @@ PROCESSED = DATA_ROOT / "processed"
 INTERIM = DATA_ROOT / "interim"
 INTERIM.mkdir(exist_ok=True)
 
-# 最终 36 维特征缓存目录：按 (pdbid, alpha, beta, tau, cutoff) 区分
-FEATURE_CACHE_DIR = PROCESSED / "feature_cache"
-FEATURE_CACHE_DIR.mkdir(exist_ok=True)
-
-FEATURE_CACHE_REFINED_DIR = FEATURE_CACHE_DIR / "refined_only"
-FEATURE_CACHE_REFINED_DIR.mkdir(exist_ok=True)
-FEATURE_CACHE_CORE_DIR = FEATURE_CACHE_DIR / "core"
-FEATURE_CACHE_CORE_DIR.mkdir(exist_ok=True)
-
-# pair 级别 φ 预计算缓存目录：按 (pdbid, alpha, beta, tau, max_cutoff_global) 区分
+# 只保留 pair cache，不再存单 pdbid feature 小文件
 PAIR_CACHE_DIR = INTERIM / "ri_pair_param_cache"
 PAIR_CACHE_DIR.mkdir(exist_ok=True)
 
+# 新的大矩阵存储
+FEATURE_CACHE_DIR = PROCESSED / "feature_cache"
+FEATURE_CACHE_DIR.mkdir(exist_ok=True)
 
+
+# ================== 辅助函数 ==================
 def _fmt(x: float) -> str:
     """
     格式化参数，避免科学计数法，同时去掉无意义的尾随 0 和点号。
     """
     return f"{x:.6f}".rstrip("0").rstrip(".")
-
-
-def _feature_cache_path(set_type: str, pdbid: str, alpha: str,
-                        beta: float, tau: float, cutoff: float) -> Path:
-    """
-    生成某个复合物在特定 RI 参数 + cutoff 下的最终 36 维特征缓存路径。
-    """
-    tag = f"a{alpha}_b{_fmt(beta)}_t{_fmt(tau)}_c{_fmt(cutoff)}"
-    return FEATURE_CACHE_DIR / set_type / f"{pdbid}_{tag}.npy"
 
 
 def _pair_cache_path(pdbid: str, alpha: str, beta: float, tau: float,
@@ -62,16 +47,19 @@ def _pair_cache_path(pdbid: str, alpha: str, beta: float, tau: float,
     return PAIR_CACHE_DIR / f"{pdbid}_{tag}.npz"
 
 
+def _bigmatrix_path(set_type: str, alpha: str, beta: float, tau: float, cutoff: float):
+    """每个参数一个大矩阵文件"""
+    tag = f"a{alpha}_b{_fmt(beta)}_t{_fmt(tau)}_c{_fmt(cutoff)}.npy"
+    return FEATURE_CACHE_DIR / set_type / tag
 
-def _load_structure_npz(set_type: str, pdbid: str) -> dict:
-    """
-    读取单个 complex 的结构 npz 文件。
-    """
+
+# ================== 结构加载 ==================
+def _load_structure_npz(set_type: str, pdbid: str):
     npz_path = PROCESSED / set_type / "structures" / f"{pdbid}.npz"
-    data = np.load(npz_path)
-    return data
+    return np.load(npz_path)
 
 
+# ================== 不变：pair cache 逻辑 ==================
 def _load_or_build_pair_cache(
     pdbid: str,
     set_type: str,
@@ -89,28 +77,19 @@ def _load_or_build_pair_cache(
     返回:
         idx_valid, dist_valid, phi_valid
     """
-    pair_cache_file = _pair_cache_path(pdbid, alpha, beta, tau, max_cutoff_global)
+    pair_file = _pair_cache_path(pdbid, alpha, beta, tau, max_cutoff_global)
 
-    if use_cache and pair_cache_file.exists():
-        cache = np.load(pair_cache_file)
-        idx_valid = cache["idx_valid"]
-        dist_valid = cache["dist_valid"]
-        phi_valid = cache["phi_valid"]
-        return idx_valid, dist_valid, phi_valid
+    if use_cache and pair_file.exists():
+        cache = np.load(pair_file)
+        return cache["idx_valid"], cache["dist_valid"], cache["phi_valid"]
 
-    # 没有缓存，重新计算
+    # 重算
     data = _load_structure_npz(set_type, pdbid)
-
-    pro_coords = data["pro_coords"]
-    pro_elems = data["pro_elems"]
-    lig_coords = data["lig_coords"]
-    lig_elems = data["lig_elems"]
-
     idx_valid, dist_valid, phi_valid = precompute_phi_pairs(
-        pro_coords=pro_coords,
-        pro_elems=pro_elems,
-        lig_coords=lig_coords,
-        lig_elems=lig_elems,
+        pro_coords=data["pro_coords"],
+        pro_elems=data["pro_elems"],
+        lig_coords=data["lig_coords"],
+        lig_elems=data["lig_elems"],
         alpha=alpha,
         beta=beta,
         tau=tau,
@@ -118,9 +97,8 @@ def _load_or_build_pair_cache(
     )
 
     if use_cache:
-        # 压缩保存，避免磁盘占用过大
         np.savez_compressed(
-            pair_cache_file,
+            pair_file,
             idx_valid=idx_valid,
             dist_valid=dist_valid,
             phi_valid=phi_valid,
@@ -129,6 +107,7 @@ def _load_or_build_pair_cache(
     return idx_valid, dist_valid, phi_valid
 
 
+# ================== load_feature：计算逻辑完全不改，只去掉小文件 read/save ==================
 def load_feature(
     pdbid: str,
     set_type: str,
@@ -140,43 +119,19 @@ def load_feature(
     max_cutoff_global: float | None = None,
 ) -> np.ndarray:
     """
-    对单个 complex 计算 36 维 RI 特征（含多层缓存，鲁棒性增强版）。
+    原本 load_feature 的运算逻辑保留：
+    - 读取 pair cache
+    - cutoff mask
+    - 聚合成 36 dim 特征
 
-    执行流程：
-        Step A（快速路径）：
-            直接加载最终 36 维特征缓存：
-                data/processed/feature_cache/<pdbid>_a{alpha}_b{beta}_t{tau}_c{cutoff}.npy
-            若成功则立即返回
-
-        Step B：
-            若缓存不存在或已损坏，则先读取/构建 pair 级缓存（跨 cutoff 重用）：
-                data/interim/ri_pair_cache/*.npz
-
-        Step C：
-            基于当前 cutoff 聚合成 36 维 RI 特征
-
-        Step D：
-            原子写回最终 36 维缓存文件（避免半写入导致损坏）
+    改动：
+    - 不再读单 pdbid feature 缓存
+    - 不再写单 pdbid feature 缓存
     """
 
-    feat_cache_file = _feature_cache_path(set_type, pdbid, alpha, beta, tau, cutoff)
-
-    # ========= Step A: 尝试加载最终特征缓存 =========
-    if use_cache and feat_cache_file.exists():
-        try:
-            RI = np.load(feat_cache_file)
-            if RI is None or RI.size == 0:
-                raise ValueError("缓存为空")
-            return RI
-        except Exception as e:
-            print(f"[警告] 检测到损坏缓存，已删除: {feat_cache_file} ({e})")
-            try:
-                feat_cache_file.unlink()
-            except OSError:
-                pass
-
-    # ========= Step B: 获取 pair 缓存 =========
-    effective_max_cutoff = float(max_cutoff_global) if max_cutoff_global is not None else float(cutoff)
+    effective_max_cutoff = (
+        float(max_cutoff_global) if max_cutoff_global is not None else float(cutoff)
+    )
 
     idx_valid, dist_valid, phi_valid = _load_or_build_pair_cache(
         pdbid=pdbid,
@@ -188,27 +143,18 @@ def load_feature(
         use_cache=use_cache,
     )
 
-    # ========= Step C: 聚合至 36 维 =========
+    # cutoff mask（你原来的逻辑）
     RI = np.zeros(FEATURE_DIM, dtype=float)
-
     if idx_valid.size > 0:
         mask = dist_valid <= float(cutoff)
         if np.any(mask):
             np.add.at(RI, idx_valid[mask], phi_valid[mask])
 
-    # ========= Step D: 写缓存 =========
-    if use_cache:
-        try:
-            np.save(str(feat_cache_file), RI)
-        except Exception as e:
-            print(f"[错误] np.save 写缓存失败: {feat_cache_file} ({e})")
-            # 写失败也返回，训练不中断
-            return RI
-
     return RI
 
 
-def build_dataset(
+# ================== 新增：构建大矩阵 ==================
+def build_bigmatrix(
     set_type: str,
     alpha: str,
     beta: float,
@@ -218,33 +164,31 @@ def build_dataset(
     max_cutoff_global: float | None = None,
 ):
     """
-    生成某个 set (refined/core) 在给定 RI 参数下的 (X, y, pdbids)。
-
-    X: [n_samples, 36]
-    y: [n_samples]   (pKd)
-    pdbids: list[str]
-
-    max_cutoff_global:
-        - None: 每次调用只针对本次 cutoff 做预计算（兼容旧用法）；
-        - 非 None: 推荐设为本轮 sweep 的 max(cutoff_list)，
-          这样同一组 (alpha,beta,tau) 下所有 cutoff 都可以重用 pair 缓存。
+    构建 N×36 大矩阵，不改 paramcached 的计算逻辑。
     """
-    assert set_type in ["refined_only", "core"], "set_type 必须是 'refined_only' 或 'core'"
 
     csv_file = PROCESSED / set_type / f"{set_type}_set_list.csv"
     df = pd.read_csv(csv_file)
-
-    n = len(df)
-    X = np.zeros((n, FEATURE_DIM), dtype=float)
-    y = df["pkd"].values
     pdbids = df["pdbid"].tolist()
+    y = df["pkd"].values
 
-    for k, pdbid in tqdm(
-        enumerate(pdbids),
-        total=n,
-        desc=f"Building {set_type} set (alpha={alpha}, beta={beta}, tau={tau}, cutoff={cutoff})"
+    out_path = _bigmatrix_path(set_type, alpha, beta, tau, cutoff)
+    out_dir = out_path.parent
+    out_dir.mkdir(exist_ok=True, parents=True)
+
+    # 保存顺序
+    np.save(out_dir / f"{set_type}_pdbids.npy", np.array(pdbids))
+    np.save(out_dir / f"{set_type}_pkd.npy", y)
+
+    # 构建大矩阵
+    N = len(pdbids)
+    X = np.zeros((N, FEATURE_DIM), dtype=float)
+
+    for i, pdbid in tqdm(
+        enumerate(pdbids), total=N,
+        desc=f"Bigmatrix(paramcached): a={alpha}, b={beta}, t={tau}, c={cutoff}"
     ):
-        X[k] = load_feature(
+        X[i] = load_feature(
             pdbid=pdbid,
             set_type=set_type,
             alpha=alpha,
@@ -255,10 +199,34 @@ def build_dataset(
             max_cutoff_global=max_cutoff_global,
         )
 
+    np.save(out_path, X)
+    print(f"[完成] 写入大矩阵: {out_path}, shape={X.shape}")
+
+    return out_path
+
+
+# ================== 新增：训练时读取大矩阵 ==================
+def load_dataset_bigmatrix(
+    set_type: str,
+    alpha: str,
+    beta: float,
+    tau: float,
+    cutoff: float,
+):
+    """
+    一次性加载 X, y, pdbids (速度最快, 用于训练)
+    """
+    base = FEATURE_CACHE_DIR / set_type
+    tag = f"a{alpha}_b{_fmt(beta)}_t{_fmt(tau)}_c{_fmt(cutoff)}.npy"
+
+    X = np.load(base / tag)
+    y = np.load(base / f"{set_type}_pkd.npy")
+    pdbids = np.load(base / f"{set_type}_pdbids.npy").tolist()
+
     return X, y, pdbids
 
 
-# ================== 可选：并行预计算入口 ==================
+# ================== 并行预计算入口 ==================
 
 def precompute_pair_cache_for_set(
     set_type: str,
@@ -270,23 +238,11 @@ def precompute_pair_cache_for_set(
     n_jobs: int = 1,
 ):
     """
-    可选工具函数：提前并行为某个 set (refined/core) + (alpha,beta,tau,max_cutoff_global)
-    预计算/刷新所有 pair 缓存。你以后如果要扩展很多 alpha/beta 的组合，可以调这个函数来加速。
+    为某个 set_type ('refined_only' 或 'core') + (alpha,beta,tau,max_cutoff_global)
+    预先计算/刷新所有 pdbid 的 pair cache。
 
-    举例：
-        from utils.data_loader import precompute_pair_cache_for_set
-
-        max_cutoff_global = max(cutoff_list)
-        precompute_pair_cache_for_set(
-            set_type="refined_only",
-            alpha="exp",
-            beta=2.5,
-            tau=1.0,
-            max_cutoff_global=max_cutoff_global,
-            n_jobs=8,
-        )
-
-    然后再跑训练时，build_dataset/load_feature 都能直接命中 pair 缓存。
+    这样后面无论是 build_bigmatrix 还是 load_feature，都可以直接命中 pair 缓存，
+    避免重复从 structures 计算。
     """
     assert set_type in ["refined_only", "core"], "set_type 必须是 'refined_only' 或 'core'"
 

@@ -1,5 +1,4 @@
 from pathlib import Path
-import joblib
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
@@ -7,9 +6,11 @@ from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr
+from joblib import Parallel, delayed
 
 from utils.ri_loader_paramcached import (
-    build_dataset,
+    load_dataset_bigmatrix,
+    build_bigmatrix,
     precompute_pair_cache_for_set,
 )
 
@@ -42,7 +43,7 @@ tau = 1.0
 cutoff_list = list(range(5, 51))   # [5,50]
 max_cutoff_global = max(cutoff_list)
 
-repeat_times = 1
+repeat_times = 5
 
 N_JOBS_CPU = 8   # 物理核心 8，逻辑 16
 
@@ -70,21 +71,62 @@ precompute_pair_cache_for_set(
 )
 
 # =====================================
+# STEP 1.5: 并行构建 bigmatrix（并且自动跳过已存在文件）
+# =====================================
+
+def bigmatrix_exists(set_type, alpha, beta, tau, cutoff):
+    """
+    检查该参数组合的大矩阵是否存在且完整。
+    完整性判断规则：文件存在 + 文件尺寸 > 1 KB（避免空文件/中断文件）。
+    如需更严格可加入 header 校验。
+    """
+    from utils.ri_loader_paramcached import _bigmatrix_path
+
+    f = _bigmatrix_path(set_type, alpha, beta, tau, cutoff)
+    return f.exists() and f.stat().st_size > 1024
+
+
+param_jobs = []
+for cutoff in cutoff_list:
+    for set_type in ["refined_only", "core"]:
+        # 如果已存在则跳过
+        if bigmatrix_exists(set_type, alpha, beta, tau, cutoff):
+            print(f"[跳过] 已存在: {set_type} cutoff={cutoff}")
+            continue
+
+        param_jobs.append((set_type, cutoff))
+
+print(f"\n将并行构建 {len(param_jobs)} 个缺失的大矩阵...\n")
+
+Parallel(n_jobs=N_JOBS_CPU)(
+    delayed(build_bigmatrix)(
+        set_type,
+        alpha,
+        beta,
+        tau,
+        cutoff,
+        use_cache=True,
+        max_cutoff_global=max_cutoff_global,
+    )
+    for (set_type, cutoff) in param_jobs
+)
+
+
+# =====================================
 # Step 2: Sweep cutoff & Train models
 # =====================================
 
 def train_and_eval(cutoff, repeat):
     print(f"\n=== Training {alpha} (repeat={repeat}): cutoff={cutoff} ===")
 
-    # 加载缓存构建好的特征（极快）
-    X_train, y_train, _ = build_dataset(
-        "refined_only", alpha, beta, tau, cutoff,
-        use_cache=True, max_cutoff_global=max_cutoff_global
+    # 用提前构建好的大矩阵（极快）
+    X_train, y_train, _ = load_dataset_bigmatrix(
+        "refined_only", alpha, beta, tau, cutoff
     )
-    X_test, y_test, ids_test = build_dataset(
-        "core", alpha, beta, tau, cutoff,
-        use_cache=True, max_cutoff_global=max_cutoff_global
+    X_test, y_test, _ = load_dataset_bigmatrix(
+        "core", alpha, beta, tau, cutoff
     )
+    print(f"  Training samples: {X_train.shape[0]}, Test samples: {X_test.shape[0]}")
 
     models = {
         "rf": RandomForestRegressor(
