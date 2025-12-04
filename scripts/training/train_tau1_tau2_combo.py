@@ -232,6 +232,12 @@ def train_rf_combo(tau1: float, tau2: float, repeat: int):
         n_jobs=-1,
     )
 
+    # rf = RandomForestRegressor(
+    #     n_estimators=550,
+    #     max_features=X_train.shape[1],
+    #     n_jobs=-1,
+    # )
+
     rf.fit(X_train, y_train)
     pred = rf.predict(X_test)
 
@@ -293,6 +299,17 @@ def train_xgb_combo_gpu(tau1: float, tau2: float, repeat: int):
         dtrain,
         num_boost_round=1400,
     )
+
+    # params = {
+    #     "tree_method": "hist",
+    #     "device": "cuda",
+
+    #     # 必需优化项（最重要）
+    #     "max_depth": 7,
+    #     "eta": 0.02,
+    # }
+
+    # num_boost_round = 1500
 
     pred = booster.predict(dtest)
 
