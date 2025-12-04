@@ -9,15 +9,14 @@ N_PRO = len(PRO_ELEMENTS)
 N_LIG = len(LIG_ELEMENTS)
 FEATURE_DIM = N_PRO * N_LIG  # 4 * 9 = 36
 
-# 简单 vdW 半径表（Å），后续你可以按需要细调
+# van der Waals radii (单位：Å)
 VDW_RADII = {
-    'H': 1.20,
     'C': 1.70,
-    'N': 1.55,
+    'N': 1.55, # 1.63 for mbondi2
     'O': 1.52,
     'F': 1.47,
     'P': 1.80,
-    'S': 1.80,
+    'S': 1.80, # 1.85 for mbondi2
     'Cl': 1.75,
     'Br': 1.85,
     'I': 1.98,
